@@ -31,7 +31,7 @@ SUBROUTINE TRANS_INQ(KRESOL,KSPEC,KSPEC2,KSPEC2G,KSPEC2MX,KNUMP,&
 !     Explicit arguments : All arguments are optional.
 !     --------------------
 !     KRESOL   - resolution tag for which info is required ,default is the
-!                first defined resulution (input)
+!                first defined resolution (input)
 
 !                   MULTI-TRANSFORMS MANAGEMENT
 !     KDEF_RESOL - number or resolutions defined
@@ -435,10 +435,6 @@ IF(PRESENT(PRPNM)) THEN
   IF(IU1 < R%NDGNH) THEN
     CALL ABORT_TRANS('TRANS_INQ:FIRST DIM. OF PRNM TOO SMALL')
   ELSE
-!    IU1 = MIN(IU1,R%NLEI3)
-!    IU2 = MIN(IU2,D%NSPOLEGL)
-!    PRPNM(1:IU1,1:IU2) = F%RPNM(1:IU1,1:IU2)
-
     DO JMLOC=1,D%NUMP,NPRTRV
       IPRTRV=MIN(NPRTRV,D%NUMP-JMLOC+1)
       DO JSETV=1,IPRTRV

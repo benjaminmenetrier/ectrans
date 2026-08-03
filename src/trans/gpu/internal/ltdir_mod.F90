@@ -26,7 +26,7 @@ CONTAINS
   FUNCTION PREPARE_LTDIR(ALLOCATOR, KF_FS, KF_UV) RESULT(HLTDIR)
     USE TPM_DISTR,              ONLY: D
     USE TPM_DIM,                ONLY: R
-    USE ISO_C_BINDING,          ONLY: C_SIZE_T, C_SIZEOF
+    USE ISO_C_BINDING,          ONLY: C_SIZEOF
     USE LEDIR_MOD,              ONLY: LEDIR_STRIDES
     USE BUFFERED_ALLOCATOR_MOD, ONLY: BUFFERED_ALLOCATOR, RESERVE
 
@@ -68,7 +68,6 @@ CONTAINS
     USE TPM_DIM,                ONLY: R
     USE TPM_DISTR,              ONLY: D
     USE TPM_GEOMETRY,           ONLY: G
-    USE PREPSNM_MOD,            ONLY: PREPSNM
     USE LEDIR_MOD,              ONLY: LEDIR_STRIDES, LEDIR
     USE UVTVD_MOD,              ONLY: UVTVD
     USE UPDSP_MOD,              ONLY: UPDSP
@@ -78,7 +77,7 @@ CONTAINS
     USE TPM_TRANS,              ONLY: NF_SC2, NF_SC3A, NF_SC3B
     USE TPM_STATS,              ONLY: GSTATS => GSTATS_NVTX
     USE BUFFERED_ALLOCATOR_MOD, ONLY: BUFFERED_ALLOCATOR, ASSIGN_PTR, GET_ALLOCATION
-    USE ISO_C_BINDING,          ONLY: C_SIZE_T, C_F_POINTER, C_LOC, C_SIZEOF
+    USE ISO_C_BINDING,          ONLY: C_F_POINTER, C_LOC, C_SIZEOF
 
     !**** *LTDIR* - Control of Direct Legendre transform step
 
@@ -103,7 +102,6 @@ CONTAINS
 
     !     Externals.
     !     ----------
-    !         PREPSNM - prepare REPSNM for wavenumber KM
     !         PRFI2   - prepares the Fourier work arrays for model variables.
     !         LEDIR   - direct Legendre transform
     !         UVTVD   -
@@ -149,11 +147,11 @@ CONTAINS
     REAL(KIND=JPRB)   ,OPTIONAL,INTENT(OUT) :: PSPSC3B(:,:,:)
     INTEGER(KIND=JPIM),OPTIONAL,INTENT(IN)  :: KFLDPTRUV(:)
     INTEGER(KIND=JPIM),OPTIONAL,INTENT(IN)  :: KFLDPTRSC(:)
-    REAL(KIND=JPRBT), INTENT(IN) :: ZINPS(:), ZINPA(:)
-    REAL(KIND=JPRD), INTENT(IN) :: ZINPS0(:), ZINPA0(:)
+    REAL(KIND=JPRBT), POINTER, INTENT(IN) :: ZINPS(:), ZINPA(:)
+    REAL(KIND=JPRD), POINTER, INTENT(IN) :: ZINPS0(:), ZINPA0(:)
 
     !     LOCAL INTEGER SCALARS
-    INTEGER(KIND=JPIM) :: IFC, IIFC, IDGLU, IFIRST
+    INTEGER(KIND=JPIM) :: IFIRST
 
     REAL(KIND=JPHOOK) :: ZHOOK_HANDLE
     REAL(KIND=JPRB), POINTER :: POA1_L(:), POA1(:,:,:)

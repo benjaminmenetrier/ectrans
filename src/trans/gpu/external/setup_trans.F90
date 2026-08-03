@@ -80,7 +80,6 @@ SUBROUTINE SETUP_TRANS(KSMAX,KDGL,KDLON,KLOEN,LDSPLIT,PSTRET,&
 !                 SULEG - Compute Legandre polonomial and Gaussian
 !                         Latitudes and Weights
 !                 SUMP_TRANS - Second part of setup of distributed environment
-!                 SUFFT - setup for FFT
 !                 SHAREDMEM_CREATE - create memory buffer for Leg.pol.
 
 !     Author.
@@ -101,7 +100,7 @@ SUBROUTINE SETUP_TRANS(KSMAX,KDGL,KDLON,KLOEN,LDSPLIT,PSTRET,&
 !        R. El Khatib  08-Jun-2023 LALL_FFTW for better flexibility
 !     ------------------------------------------------------------------
 
-USE PARKIND1,        ONLY: JPIM, JPRB, JPRD, JPIB
+USE PARKIND1,        ONLY: JPIM, JPRD, JPIB
 USE PARKIND_ECTRANS, ONLY: JPRBT
 
 !ifndef INTERFACE
@@ -122,14 +121,12 @@ USE SUMP_TRANS_MOD,              ONLY: SUMP_TRANS
 USE SUMP_TRANS_PRELEG_MOD,       ONLY: SUMP_TRANS_PRELEG
 USE SULEG_MOD,                   ONLY: SULEG
 USE PRE_SULEG_MOD,               ONLY: PRE_SULEG
-USE SUFFT_MOD,                   ONLY: SUFFT
 USE ABORT_TRANS_MOD,             ONLY: ABORT_TRANS
 USE SHAREDMEM_MOD,               ONLY: SHAREDMEM_CREATE
 USE YOMHOOK,                     ONLY: LHOOK, DR_HOOK, JPHOOK
-USE PREPSNM_MOD,                 ONLY: PREPSNM
 #ifdef ACCGPU
 USE OPENACC,                     ONLY: ACC_DEVICE_KIND, ACC_GET_DEVICE_TYPE, ACC_GET_NUM_DEVICES, &
-  &                                    ACC_SET_DEVICE_NUM, ACC_GET_DEVICE_NUM
+  &                                    ACC_SET_DEVICE_NUM
 #endif
 
 !endif INTERFACE
@@ -165,8 +162,7 @@ INTEGER(C_SIZE_T) ,OPTIONAL,INTENT(IN) :: KLEGPOLPTR_LEN
 
 ! Local variables
 INTEGER(KIND=JPIM) :: JGL, JRES, IDEF_RESOL
-INTEGER(KIND=JPIM) :: JMLOC, KM, ILA, ILS, KDGLU
-INTEGER(KIND=JPIM) :: IMLOC0(1)
+INTEGER(KIND=JPIM) :: JMLOC, KM, ILA, ILS, KDGLU, JN
 
 LOGICAL :: LLP1, LLP2, LLSPSETUPONLY
 REAL(KIND=JPHOOK) :: ZHOOK_HANDLE
@@ -174,7 +170,7 @@ REAL(KIND=JPHOOK) :: ZHOOK_HANDLE
 #ifdef ACCGPU
 INTEGER(ACC_DEVICE_KIND) :: IDEVTYPE
 #endif
-INTEGER :: INUMDEVS, IDEV, MYGPU
+INTEGER :: INUMDEVS, MYGPU
 
 REAL(KIND=JPRBT), POINTER :: LOCAL_ARR(:,:)
 !     ------------------------------------------------------------------
@@ -381,7 +377,8 @@ IF(PRESENT(LDGRIDONLY)) THEN
   IF (D%LGRIDONLY) THEN
       R%NSMAX=1
       R%NTMAX = R%NSMAX
-      WRITE(NOUT,'(A,I0)') "DEVELOPER WARNING: LDGRIDONLY IS NOT YET IMPLEMENTED CORRECTLY WITH GPU BACKEND. IGNORE AND USE TRUNCATION: ", R%NSMAX
+      WRITE(NOUT,'(A,I0)') "DEVELOPER WARNING: LDGRIDONLY IS NOT YET IMPLEMENTED CORRECTLY WITH GPU&
+        & BACKEND. IGNORE AND USE TRUNCATION: ", R%NSMAX
       D%LGRIDONLY = .FALSE.
   ENDIF
 ! >>>>>>>>>>>>>
@@ -463,8 +460,6 @@ IF( .NOT.LLSPSETUPONLY ) THEN
   CALL SUMP_TRANS
   CALL GSTATS(1802,0)
 
-  ! Initialize Fast Fourier Transform package
-  IF (.NOT.D%LCPNMONLY) CALL SUFFT
   CALL GSTATS(1802,1)
 ELSE
   CALL PRE_SULEG
@@ -522,10 +517,19 @@ IF( .NOT.D%LGRIDONLY ) THEN
       FG%ZAS0(1:KDGLU,1:ILS)=S%FA(JMLOC)%RPNMS(1:KDGLU,1:ILS)
     ENDIF
   ENDDO
-  
+
+  ! Prepare GPU version of EPSNM
   ALLOCATE(FG%ZEPSNM(D%NUMP,0:R%NTMAX+2))
-  FG%ZEPSNM = 0._JPRBT
-  CALL PREPSNM
+  FG%ZEPSNM(:,:) = 0.0_JPRBT
+
+  DO JMLOC = 1, D%NUMP
+     KM = D%MYMS(JMLOC)
+
+     DO JN = KM, R%NTMAX + 2
+        FG%ZEPSNM(JMLOC,JN) = REAL(F%REPSNM(D%NPMT(KM) + JMLOC - KM + JN), JPRBT)
+     ENDDO
+  ENDDO
+
   WRITE(NOUT,*)'setup_trans: sizes1 NUMP=',D%NUMP
 #ifdef ACCGPU
   WRITE(NOUT,*) 'Using OpenACC'

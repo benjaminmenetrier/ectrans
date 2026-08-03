@@ -27,90 +27,110 @@ env:
   CACHE_SUFFIX: v1        # Increase to force new cache to be created
 
 jobs:
+  should-run:
+    name: decide whether to run build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      value: ${{ steps.decision.outputs.value }}
+    steps:
+      - name: Checkout reusable workflow action
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/should-run
+
+      - name: Decide whether this build should run
+        id: decision
+        uses: ./.github/actions/should-run
+
   ci-hpc:
     name: ci-hpc
-    if: ${{ !github.event.pull_request.head.repo.fork && github.event.action != 'labeled' || github.event.label.name == 'approved-for-ci' }}
+    needs: should-run
+    if: ${{ needs.should-run.outputs.value == 'true' && (!github.event.pull_request.head.repo.fork && github.event.action != 'labeled' || github.event.label.name == 'approved-for-ci') }}
 
     strategy:
       fail-fast: false    # false: try to complete all jobs
 
       matrix:
         name:
+          - ac-ops intel
           - ac-gpu nvhpc
           - lumi-g cce
 
         include:
+          - name: ac-ops intel
+            site: ac-batch
+            troika_user_secret: HPC_CI_SSH_USER
+            arch: ecmwf/hpc2020/intel/2023.2.0/hpcx-openmpi/2.9.0
+            sbatch_options: |
+              #SBATCH --time=00:45:00
+              #SBATCH --nodes=1
+              #SBATCH --ntasks=4
+              #SBATCH --cpus-per-task=32
+              #SBATCH --gpus-per-task=0
+              #SBATCH --mem=200G
+              #SBATCH --qos=np
+            env_vars:
+              - CMAKE_GENERATOR=Ninja
+
           - name: ac-gpu nvhpc
             site: ac-batch
             troika_user_secret: HPC_CI_SSH_USER
+            arch: ecmwf/hpc2020/nvhpc/24.5/hpcx-openmpi/2.19.0-cuda
             sbatch_options: |
-              #SBATCH --time=00:20:00
+              #SBATCH --time=01:30:00
               #SBATCH --nodes=1
-              #SBATCH --ntasks=2
+              #SBATCH --ntasks=4
               #SBATCH --cpus-per-task=32
               #SBATCH --gpus-per-task=1
               #SBATCH --mem=200G
-              #SBATCH --qos=dg
-            modules:
-              - cmake
-              - ninja
-              - prgenv/nvidia
-              - hpcx-openmpi/2.14.0-cuda
-              - fftw
-            cmake_options: -DENABLE_ACC=ON -G Ninja
+              #SBATCH --qos=ng
+            env_vars:
+              - CMAKE_GENERATOR=Ninja
 
           - name: lumi-g cce
             site: lumi
             troika_user_secret: LUMI_CI_SSH_USER
             account_secret: LUMI_CI_PROJECT
+            arch: eurohpc/lumi-g/cray/19.0.0
             sbatch_options: |
-              #SBATCH --time=00:40:00
+              #SBATCH --time=01:10:00
               #SBATCH --nodes=1
               #SBATCH --ntasks-per-node=8
               #SBATCH --gpus-per-task=1
               #SBATCH --partition=standard-g
               #SBATCH --account={0}
-            modules:
-              - CrayEnv
-              - PrgEnv-cray
-              - cce/17.0.1
-              - craype-accel-amd-gfx90a
-              - rocm/6.0.3
-              - cray-fftw
-              - buildtools
-            output_dir: /scratch/{0}/github-actions/ectrans/${{ github.run_id }}/${{ github.run_attempt }}
-            workdir: /scratch/{0}/github-actions/ectrans/${{ github.run_id }}/${{ github.run_attempt }}
-            cmake_options: >
-              -DOpenMP_C_LIB_NAMES=craymp -DOpenMP_CXX_LIB_NAMES=craymp
-              -DOpenMP_Fortran_LIB_NAMES=craymp -DOpenMP_craymp_LIBRARY=craymp
-              -DENABLE_OMP=ON
             env_vars:
-              - ROCFFT_RTC_CACHE_PATH=$PWD/rocfft_kernel_cache.db
+              - ROCFFT_RTC_CACHE_PATH=$PWD/../../rocfft_kernel_cache.db
               - MPICH_GPU_SUPPORT_ENABLED=1
               - MPICH_SMP_SINGLE_COPY_MODE=NONE
               - CMAKE_BUILD_PARALLEL_LEVEL=1
+            ctest_options: -E compare_checksums # We don't bother with reproducibility checks on LUMI
+            unsupported_dependency: ecmwf-ifs/field_api # We don't build Field API on LUMI for now
 
 
     runs-on: [self-hosted, linux, hpc]
     env:
       GH_TOKEN: ${{ github.token }}
+      OUTPUT_DIR: ${{ format('/scratch/{0}/github-actions/ectrans/{1}/{2}/{3}', secrets[matrix.account_secret || matrix.troika_user_secret], github.run_id, strategy.job-index, github.run_attempt) }}
+      WORKDIR: ${{ format('/scratch/{0}/github-actions/ectrans/{1}/{2}/{3}', secrets[matrix.account_secret || matrix.troika_user_secret], github.run_id, strategy.job-index, github.run_attempt) }}
     steps:
       - uses: ecmwf-actions/reusable-workflows/ci-hpc-generic@v2
         with:
           site: ${{ matrix.site }}
           troika_user: ${{ secrets[matrix.troika_user_secret] }}
           sbatch_options: ${{ format(matrix.sbatch_options, secrets[matrix.account_secret]) }}
-          output_dir: ${{ format(matrix.output_dir, secrets[matrix.account_secret]) || '' }}
-          workdir: ${{ format(matrix.workdir, secrets[matrix.account_secret]) || '' }}
+          output_dir: ${{ env.OUTPUT_DIR }}
+          workdir: ${{ env.WORKDIR }}
           template_data: |
             site: ${{ matrix.site }}
+            arch: ${{ matrix.arch }}
             cmake_options:
-              - -DENABLE_MPI=ON
-              - -DENABLE_GPU=ON
               - -DENABLE_ETRANS=ON
-              - -DENABLE_GPU_GRAPHS_GEMM=OFF
-              - -DENABLE_GPU_GRAPHS_FFT=OFF
-              - ${{ matrix.cmake_options || '' }}
+              - -DENABLE_FIELD_API=ON
             ctest_options: ${{ matrix.ctest_options || '' }}
             dependencies:
               ecmwf/ecbuild:
@@ -119,7 +139,9 @@ jobs:
                 version: develop
                 cmake_options:
                   - -DENABLE_MPI=ON
-                  - ${{ matrix.cmake_options || '' }}
+              ecmwf-ifs/field_api:
+                version: v0.3.9
+            unsupported_dependency: ${{ matrix.unsupported_dependency || '' }}
           template: |
             REPO=${{ github.event.pull_request.head.repo.full_name || github.repository }}
             SHA=${{ github.event.pull_request.head.sha || github.sha }}
@@ -127,14 +149,23 @@ jobs:
             # Cleanup function
             cleanup() {
               {% for name in dependencies.keys() %}
-                rm -r {{name}}
+                {% if name != unsupported_dependency %}
+                  rm -r {{name}}
+                {% endif %}
               {% endfor %}
 
               rm -r $REPO
               rm -r build
 
-              if [ "{{ site }}" = "lumi" ]; then
-                rm -f $ROCFFT_RTC_CACHE_PATH
+              {% for name in dependencies.keys() %}
+                {% if name != unsupported_dependency %}
+                  {% set org, proj = name.split('/') %}
+                  rmdir {{org}} 2>/dev/null || true
+                {% endif %}
+              {% endfor %}
+              repo_owner=$(dirname "$REPO")
+              if [ "$repo_owner" != "." ]; then
+                rmdir "$repo_owner" 2>/dev/null || true
               fi
             }
             error_trap() {
@@ -146,9 +177,7 @@ jobs:
 
             trap error_trap ERR
 
-            {% for module in "${{ join(matrix.modules, ',') }}".split(',') %}
-              module load {{module}}
-            {% endfor %}
+            BASEDIR=$PWD
 
             {% for var in "${{ join(matrix.env_vars, ',') }}".split(',') %}
               export {{var}}
@@ -156,24 +185,21 @@ jobs:
 
             export CMAKE_TEST_LAUNCHER="srun;-n;1"
             export DR_HOOK_ASSERT_MPI_INITIALIZED=0
-            BASEDIR=$PWD
+
+            # Fetch dependencies
             {% for name, options in dependencies.items() %}
+              {% if name != unsupported_dependency %}
                 mkdir -p {{name}}
                 pushd {{name}}
                 git init
                 git remote add origin ${{ github.server_url }}/{{name}}
                 git fetch origin {{options['version']}}
                 git reset --hard FETCH_HEAD
-                cmake -S . -B build \
-                  {% for name in dependencies %}
-                    {% set org, proj = name.split('/') %}
-                    -D{{proj}}_ROOT=$BASEDIR/{{name}}/installation \
-                  {% endfor %}
-                  {{ options['cmake_options']|join(' ') }}
-                cmake --build build
-                cmake --install build --prefix installation
                 popd
+              {% endif %}
             {% endfor %}
+
+            # Fetch ecTrans
             mkdir -p $REPO
             pushd $REPO
             git init
@@ -181,10 +207,34 @@ jobs:
             git fetch origin $SHA
             git reset --hard FETCH_HEAD
             popd
+
+            source $BASEDIR/$REPO/package/bundle/arch/{{ arch }}/env.sh
+
+            # Build dependencies
+            {% for name, options in dependencies.items() %}
+              {% if name != unsupported_dependency %}
+                pushd {{name}}
+                cmake -S . -B build \
+                  {% for name in dependencies %}
+                    {% if name != unsupported_dependency %}
+                      {% set org, proj = name.split('/') %}
+                      -D{{proj}}_ROOT=$BASEDIR/{{name}}/installation \
+                    {% endif %}
+                  {% endfor %}
+                  {{ options['cmake_options']|join(' ') }}
+                cmake --build build
+                cmake --install build --prefix installation
+                popd
+              {% endif %}
+            {% endfor %}
+
+            # Build ecTrans
             cmake -S $REPO -B build \
               {% for name in dependencies %}
-                {% set org, proj = name.split('/') %}
-                -D{{proj}}_ROOT=$BASEDIR/{{name}}/installation \
+                {% if name != unsupported_dependency %}
+                  {% set org, proj = name.split('/') %}
+                  -D{{proj}}_ROOT=$BASEDIR/{{name}}/installation \
+                {% endif %}
               {% endfor %}
               {{ cmake_options|join(' ') }}
             cmake --build build
@@ -192,4 +242,3 @@ jobs:
             ctest --test-dir build --output-on-failure {{ ctest_options }}
 
             cleanup
-

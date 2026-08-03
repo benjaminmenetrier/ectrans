@@ -34,11 +34,24 @@ use, intrinsic :: iso_fortran_env, only: &
   output_unit, &
   error_unit
 
+use OML_MOD, only: &
+  OML_MY_THREAD, &
+  OML_GET_NUM_THREADS
+
 use MPL_module, only: &
   MPL_INIT, &
   MPL_END, &
   MPL_NPROC, &
-  MPL_MYRANK
+  MPL_MYRANK, &
+  MPL_SETDFLT_COMM, &
+  MPL_COMM_OML, &
+  LMPLUSERCOMM, &
+  MPLUSERCOMM, &
+  MPL_COMM_COMPARE
+
+use MPL_DATA_MODULE, only: &
+  MPL_NUMPROC
+
 implicit none
 
 private :: c_ptr
@@ -181,7 +194,7 @@ type, bind(C) :: Trans_t
 
   ! MULTI-TRANSFORMS MANAGEMENT
   integer(c_int) :: handle       ! --  Resolution tag for which info is required ,default is the
-                                 !     first defined resulution (input)
+                                 !     first defined resolution (input)
 
   ! SPECTRAL SPACE
   integer(c_int) :: nspec        ! --  Number of complex spectral coefficients on this PE
@@ -446,7 +459,8 @@ interface
     use, intrinsic :: iso_c_binding, only: c_ptr
     type(c_ptr), intent(in) :: ptr
   end subroutine transi_free
-  subroutine transi_disable_DR_HOOK_ASSERT_MPI_INITIALIZED() bind(C,name="transi_disable_DR_HOOK_ASSERT_MPI_INITIALIZED")
+  subroutine transi_disable_DR_HOOK_ASSERT_MPI_INITIALIZED() bind(C, &
+    & name="transi_disable_DR_HOOK_ASSERT_MPI_INITIALIZED")
   end subroutine
 end interface
 
@@ -488,7 +502,7 @@ function c_str_to_string(s) result(string)
   use, intrinsic :: iso_c_binding
   character(kind=c_char,len=1), intent(in) :: s(*)
   character(len=:), allocatable :: string
-  integer i, nchars
+  integer :: i, nchars
   i = 1
   do
      if (s(i) == c_null_char) exit
@@ -513,7 +527,7 @@ end function
 ! =============================================================================
 
 subroutine to_lower(str)
-  character(*), intent(in out) :: str
+  character(*), intent(inout) :: str
   integer :: i
 
   do i = 1, len(str)
@@ -639,6 +653,59 @@ function trans_init() bind(C,name="trans_init") result(iret)
 end function trans_init
 
 
+function trans_set_mpi_comm(mpi_user_comm) bind(C,name="trans_set_mpi_comm") result(iret)
+  use, intrinsic :: iso_c_binding
+  integer(c_int) :: iret
+  integer(c_int), value, intent(in) :: mpi_user_comm
+
+  integer :: dummy_comm
+  integer(c_int) :: MPL_COMM_COMPARE_RESULT, MPL_COMM_COMPARE_ERROR
+
+  iret = TRANS_SUCCESS
+  if (.not. USE_MPI) return
+
+  ! Confirm that this is called prior to trans_init, to ensure correct setting of global vars.
+  !
+  ! If it is the case that trans_init has been called prior, ensure the comm here is the same
+  ! as what has been setup previously.
+  if (.not. is_init) then
+    ! MPL not yet initialised.
+    if (MPL_NUMPROC == -1) then
+      ! Set LMPLUSERCOMM and MPLUSERCOMM to be used in MPL_INIT when trans_init() is called
+      LMPLUSERCOMM = .TRUE.
+      MPLUSERCOMM = mpi_user_comm
+    else
+      call MPL_SETDFLT_COMM(mpi_user_comm, dummy_comm)
+    end if
+  else
+    ! Trans already initialised. If it has already been setup with the requested communicator
+    ! then there is no issue. Otherwise, the user is attempting to change the comm
+    ! mid-run which is not supported.
+    if (size(MPL_COMM_OML) < OML_GET_NUM_THREADS()) then
+      write(error_unit,'(A,I0,A,I0)') "trans_set_mpi_comm: ERROR: Mismatch in number of OML &
+                               & MPI comms in MPL: size ", size(MPL_COMM_OML), &
+                               "should be = ", OML_GET_NUM_THREADS()
+      iret = TRANS_ERROR
+      return
+    end if
+
+    CALL MPL_COMM_COMPARE(mpi_user_comm, MPL_COMM_OML(OML_MY_THREAD()), MPL_COMM_COMPARE_RESULT, MPL_COMM_COMPARE_ERROR)
+    IF (MPL_COMM_COMPARE_ERROR /= 0 .OR. MPL_COMM_COMPARE_RESULT > 1) THEN
+      ! The communicators are not identical (MPL_COMM_COMPARE_RESULT=0) and not congruent (MPL_COMM_COMPARE_RESULT=1)
+      write(error_unit,'(A)') "trans_set_mpi_comm: ERROR:&
+          & trans_set_mpi_comm must be called prior to trans_init."
+      write(error_unit,'(A,I0,A)') "                          &
+          & Previously initialised with a different MPI communicator (",MPL_COMM_OML(OML_MY_THREAD()),")"
+      write(error_unit,'(A,I0,A)') "                          &
+          & Changing the communicator mid-run to a non-congruent one (",mpi_user_comm,") is not supported."
+      iret = TRANS_ERROR
+      return
+    end if
+  end if
+
+end function trans_set_mpi_comm
+
+
 function trans_setup(trans) bind(C,name="trans_setup") result(iret)
   use, intrinsic :: iso_c_binding
   integer(c_int) :: iret
@@ -694,7 +761,7 @@ function trans_setup(trans) bind(C,name="trans_setup") result(iret)
   endif
 
   lspeconly = .False.
-  if( trans%ndgl < 0 ) then
+  if( trans%ndgl < 0 .and. trans%nlon < 0 ) then
     lspeconly = .true.
     trans%ndgl = 2
   endif
@@ -1056,6 +1123,12 @@ function trans_setup(trans) bind(C,name="trans_setup") result(iret)
       return
     endif
 
+    ! ESETUP_TRANS does not have LDSPSETUPONLY, so add the grid resolution here
+    if (lspeconly) then
+      trans%nlon = trans%nmsmax * 2 + 1
+      trans%ndgl = trans%nsmax  * 2 + 1
+    endif
+
     ! set resolution-dependent defaults
     if (trans%ndgux<0) trans%ndgux=trans%ndgl
 
@@ -1200,7 +1273,7 @@ end function trans_inquire_cstr
 function trans_inquire_fstr(trans,vars_fstr) result(iret)
   integer(c_int) :: iret
   type(Trans_t), intent(inout) :: trans
-  character(len=*) :: vars_fstr
+  character(len=*), intent(in) :: vars_fstr
   character(20) :: var_arr(30), var
   integer :: nvars, jvar
   !logical(c_bool), pointer :: bool1(:)

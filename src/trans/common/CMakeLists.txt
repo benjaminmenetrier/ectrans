@@ -43,6 +43,7 @@ list( APPEND ectrans_common_src
   internal/sumplatb_mod.F90
   internal/sumplatbeq_mod.F90
   internal/sumplatf_mod.F90
+  internal/sutrle_mod.F90
   internal/mysendset_mod.F90
   internal/myrecvset_mod.F90
   internal/suwavedi_mod.F90
@@ -70,10 +71,10 @@ ecbuild_add_library(
                    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/trans/include/ectrans>
                    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/trans/include>
 )
-ectrans_target_fortran_module_directory(
-  TARGET            ectrans_common
-  MODULE_DIRECTORY  ${CMAKE_BINARY_DIR}/module/ectrans
-  INSTALL_DIRECTORY module/ectrans
+ecbuild_target_fortran_module_directory(
+  TARGET                   ectrans_common
+  MODULE_DIRECTORY         ${CMAKE_BINARY_DIR}/module/ectrans
+  INSTALL_MODULE_DIRECTORY module/ectrans
 )
 
 if( HAVE_OMP )

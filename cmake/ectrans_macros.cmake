@@ -18,9 +18,9 @@ if( NOT ${PROJECT_NAME}_GIT_SHA1 )
     endif()
 endif()
 
-include( ectrans_target_fortran_module_directory )
 include( ectrans_find_lapack )
 include( ectrans_find_cuda )
 include( ectrans_find_hip )
+include( ectrans_add_flags )
 include( CheckLanguage )
 
